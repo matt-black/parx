@@ -31,10 +31,10 @@ class PartialConv(eqx.nn.Conv):
         num_spatial_dims: int,
         in_channels: int,
         out_channels: int,
-        kernel_size: Union[int, Sequence[int]],
-        stride: Union[int, Sequence[int]] = 1,
+        kernel_size: int | Sequence[int],
+        stride: int | Sequence[int] = 1,
         padding: Union[str, int, Sequence[int], Sequence[Tuple[int, int]]] = 0,
-        dilation: Union[int, Sequence[int]] = 1,
+        dilation: int | Sequence[int] = 1,
         groups: int = 1,
         use_bias: bool = False,
         padding_mode: str = "ZEROS",
@@ -53,11 +53,11 @@ class PartialConv(eqx.nn.Conv):
             num_spatial_dims (int): number of spatial dimensions
             in_channels (int): number of input channels
             out_channels (int): number of output channels
-            kernel_size (Union[int, Sequence[int]]): size of the convolution kernel
+            kernel_size (int | Sequence[int]): size of the convolution kernel
             key (PRNGKeyArray): a `jax.random.PRNGKey` used to provide randomness for parameter initialization. (Keyword only argument).
-            stride (Union[int, Sequence[int]], optional): stride of the convolution. Defaults to 1.
+            stride (int | Sequence[int], optional): stride of the convolution. Defaults to 1.
             padding (Union[str, int, Sequence[int], Sequence[Tuple[int, int]]], optional): padding of the convolution. Defaults to 0.
-            dilation (Union[int, Sequence[int]], optional): dilation of the convolution. Defaults to 1.
+            dilation (int | Sequence[int], optional): dilation of the convolution. Defaults to 1.
             groups (int, optional): number of input channel groups. Defaults to 1.
             use_bias (bool, optional): whether to add on a bias after the convolution. Defaults to False.
             padding_mode (str, optional): string to specify padding values. See Equinox `nn.Conv` documentation. Defaults to "ZEROS".
@@ -189,10 +189,10 @@ class PartialConvBlock(eqx.Module):
         single_conv: bool,
         in_channels: int,
         out_channels: int,
-        kernel_size: int,
-        stride: Union[int, Sequence[int]] = 1,
+        kernel_size: int | Sequence[int],
+        stride: int | Sequence[int] = 1,
         padding: Union[str, int, Sequence[int], Sequence[Tuple[int, int]]] = 0,
-        dilation: Union[int, Sequence[int]] = 1,
+        dilation: int | Sequence[int] = 1,
         groups: int = 1,
         use_bias: bool = False,
         padding_mode: str = "ZEROS",
@@ -212,9 +212,9 @@ class PartialConvBlock(eqx.Module):
             out_channels (int): number of output channels
             kernel_size (int): size of convolution kernel
             key (PRNGKeyArray): PRNG key
-            stride (Union[int, Sequence[int]], optional): convolution stride, can be specified per-convolution. Defaults to 1.
+            stride (int | Sequence[int], optional): convolution stride, can be specified per-convolution. Defaults to 1.
             padding (Union[str, int, Sequence[int], Sequence[Tuple[int, int]]], optional): padding to apply before/after each spatial dimension. Defaults to 0.
-            dilation (Union[int, Sequence[int]], optional): convolution dilation. Defaults to 1.
+            dilation (int | Sequence[int], optional): convolution dilation. Defaults to 1.
             groups (int, optional): groups for convolution. Defaults to 1.
             use_bias (bool, optional): whether or not to use a bias term. Defaults to False.
             padding_mode (str, optional): how to do the padding. Defaults to "ZEROS".
