@@ -21,7 +21,6 @@ class PartialConv(eqx.nn.Conv):
     window_size: int = eqx.field(static=True)
     # fft attrs
     is_fft: bool = eqx.field(static=True)
-    fft_apply_channelwise: bool = eqx.field(static=True)
     # mask/masking attrs
     mask_update_kernel: Array
     update_mask_fun: Callable[[Array], Array]
@@ -41,7 +40,6 @@ class PartialConv(eqx.nn.Conv):
         dtype=None,
         return_mask: bool = False,
         fft_conv: bool = False,
-        fft_apply_channelwise: bool = False,
         *,
         weight: Array | None = None,
         fixed: bool = False,
@@ -64,7 +62,6 @@ class PartialConv(eqx.nn.Conv):
             dtype (_type_, optional): dtype to use for the weight and bias in this layer. Defaults to None, which will use either `jnp.float32` or `jnp.float64` depending on whether JAX is in 64-bit mode.
             return_mask (bool, optional): return the current mask. Defaults to False.
             fft_conv (bool, optional): use FFT convolution. Defaults to False.
-            fft_apply_channelwise (bool, optional): for FFT convolution, apply filters to all channels independently. Defaults to False.
 
         Raises:
             NotImplementedError: if `use_bias=True`, which is unimplemented.
@@ -87,6 +84,7 @@ class PartialConv(eqx.nn.Conv):
         )
         # internal properties for my use
         self.fixed = fixed
+        # NOTE: self.weight is set by Equinox, this is overwriting it.
         if weight is not None:
             self.weight = weight
         if fixed:
@@ -94,7 +92,6 @@ class PartialConv(eqx.nn.Conv):
         # fft specific properties
         self.return_mask = return_mask
         self.is_fft = fft_conv
-        self.fft_apply_channelwise = fft_apply_channelwise
         # masking properties for partial convolution
         upd_kernel_size = [out_channels, in_channels]
         if isinstance(self.kernel_size, int):
@@ -117,18 +114,12 @@ class PartialConv(eqx.nn.Conv):
         self.window_size = math.prod(self.mask_update_kernel.shape[2:])
 
     def _fft_convolution(self, x: Array, x_fourier: bool) -> Array:
-        in_shape = x.shape
         fourier_axes = list(range(1, self.num_spatial_dims + 1))
         if not x_fourier:
             x_fft = jnp.fft.fftn(x, axes=fourier_axes)
         else:
             x_fft = x
-        if self.fft_apply_channelwise:
-            y_fft = jnp.multiply(
-                x_fft[None, ...], self.weight[:, None, ...]
-            ).reshape(-1, in_shape[1:])
-        else:
-            y_fft = jnp.multiply(x_fft, self.weight)
+        y_fft = jnp.multiply(x_fft, self.weight)
         if x_fourier:
             return y_fft
         else:
@@ -198,7 +189,6 @@ class PartialConvBlock(eqx.Module):
         padding_mode: str = "ZEROS",
         dtype=None,
         fft_conv: bool = False,
-        fft_apply_channelwise: bool = False,
         activation: str = "leaky_relu",
         *,
         key: PRNGKeyArray,
@@ -220,7 +210,6 @@ class PartialConvBlock(eqx.Module):
             padding_mode (str, optional): how to do the padding. Defaults to "ZEROS".
             dtype (_type_, optional): datatype for weights in the layer. Defaults to None.
             fft_conv (bool, optional): whether to use FFT convolutions or not. Defaults to False.
-            fft_apply_channelwise (bool, optional): whether to apply the FFT convolution channelwise. Defaults to False.
             activation (str, optional): the activation function to use after each convolution. Defaults to "leaky_relu".
 
         Raises:
@@ -241,7 +230,6 @@ class PartialConvBlock(eqx.Module):
             dtype,
             True,
             fft_conv,
-            fft_apply_channelwise,
             key=key1,
         )
         if not single_conv:
@@ -259,7 +247,6 @@ class PartialConvBlock(eqx.Module):
                 dtype,
                 True,
                 fft_conv,
-                fft_apply_channelwise,
                 key=key2,
             )
         else:
