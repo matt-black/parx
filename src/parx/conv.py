@@ -7,6 +7,7 @@ from typing import Optional, Sequence, Tuple, Union
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from equinox.nn._misc import default_init
 from jax.tree_util import Partial
 from jaxtyping import Array, Bool, Num, PRNGKeyArray
 
@@ -24,6 +25,8 @@ class PartialConv(eqx.nn.Conv):
     # mask/masking attrs
     mask_update_kernel: Array
     update_mask_fun: Callable[[Array], Array]
+    # bias term
+    _bias: Array | None
 
     def __init__(
         self,
@@ -62,12 +65,17 @@ class PartialConv(eqx.nn.Conv):
             dtype (_type_, optional): dtype to use for the weight and bias in this layer. Defaults to None, which will use either `jnp.float32` or `jnp.float64` depending on whether JAX is in 64-bit mode.
             return_mask (bool, optional): return the current mask. Defaults to False.
             fft_conv (bool, optional): use FFT convolution. Defaults to False.
-
-        Raises:
-            NotImplementedError: if `use_bias=True`, which is unimplemented.
         """
-        if use_bias:
-            raise NotImplementedError("can't use bias with PartialConv, yet")
+        bkey, ckey = jax.random.split(key, 2)
+        grouped_in_channels = in_channels // groups
+        lim = 1 / math.sqrt(
+            grouped_in_channels
+            * (
+                kernel_size
+                if isinstance(kernel_size, int)
+                else math.prod(kernel_size)
+            )
+        )
         super().__init__(
             num_spatial_dims,
             in_channels,
@@ -77,10 +85,10 @@ class PartialConv(eqx.nn.Conv):
             padding,
             dilation,
             groups,
-            use_bias,
+            False,
             padding_mode,
             dtype,
-            key=key,
+            key=ckey,
         )
         # internal properties for my use
         self.fixed = fixed
@@ -93,7 +101,7 @@ class PartialConv(eqx.nn.Conv):
         self.return_mask = return_mask
         self.is_fft = fft_conv
         # masking properties for partial convolution
-        upd_kernel_size = [out_channels, in_channels]
+        upd_kernel_size = [out_channels, grouped_in_channels]
         if isinstance(self.kernel_size, int):
             upd_kernel_size += [
                 self.kernel_size,
@@ -112,6 +120,12 @@ class PartialConv(eqx.nn.Conv):
             feature_group_count=1,
         )
         self.window_size = math.prod(self.mask_update_kernel.shape[2:])
+        # setup the bias term
+        if use_bias:
+            bshape = (out_channels,) + (1,) * num_spatial_dims
+            self._bias = default_init(bkey, bshape, dtype, lim)
+        else:
+            self._bias = None
 
     def _fft_convolution(self, x: Array, x_fourier: bool) -> Array:
         fourier_axes = list(range(1, self.num_spatial_dims + 1))
@@ -138,9 +152,6 @@ class PartialConv(eqx.nn.Conv):
             mask (Bool[Array]): mask array.
             epsilon (float, optional): small parameter to prevent division by zero. Defaults to 1e-8.
 
-        Raises:
-            NotImplementedError: convolution with bias isn't implemented.
-
         Returns:
             Union[Array, Tuple[Array, Array]]: either the post-convolution array, or the post-convolution array and the updated mask, if `return_mask=True` was set during module initialization.
         """
@@ -155,8 +166,10 @@ class PartialConv(eqx.nn.Conv):
         else:
             out = super().__call__(jnp.multiply(x, mask))
 
-        if self.use_bias:
-            raise NotImplementedError("todo")
+        if self._bias is not None:
+            out = jnp.multiply(
+                jnp.add(jnp.multiply(out, mask_scaler), self._bias), update_mask
+            )
         else:
             out = jnp.multiply(out, mask_scaler)
         if self.return_mask:
