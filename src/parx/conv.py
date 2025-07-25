@@ -185,6 +185,7 @@ class PartialConvBlock(eqx.Module):
 
     conv1: PartialConv
     conv2: Optional[PartialConv]
+    dropout: eqx.nn.Dropout
     activation: Callable[[Array], Array]
 
     def __init__(
@@ -203,6 +204,7 @@ class PartialConvBlock(eqx.Module):
         dtype=None,
         fft_conv: bool = False,
         activation: str = "leaky_relu",
+        dropout_prob: float = 0.0,
         *,
         key: PRNGKeyArray,
     ):
@@ -270,8 +272,14 @@ class PartialConvBlock(eqx.Module):
             self.activation = jax.nn.relu
         else:
             raise ValueError("only ReLU and Leaky ReLU are valid")
+        if dropout_prob == 0:
+            self.dropout = eqx.nn.Dropout(inference=True)
+        else:
+            self.dropout = eqx.nn.Dropout(p=dropout_prob)
 
-    def __call__(self, x: Array, mask_in: Array) -> Tuple[Array, Array]:
+    def __call__(
+        self, x: Array, mask_in: Array, key: PRNGKeyArray
+    ) -> Tuple[Array, Array]:
         """Forward pass through the convolution block.
 
         Args:
@@ -282,7 +290,7 @@ class PartialConvBlock(eqx.Module):
             Tuple[Array,Array]: output array and updated mask
         """
         y, mask = self.conv1(x, mask_in)
-        y = self.activation(y)
+        y = self.dropout(self.activation(y), key=key)
         if self.conv2 is not None:
             z, mask = self.conv2(x, mask)
             return self.activation(z), mask
