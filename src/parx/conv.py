@@ -11,7 +11,7 @@ from equinox.nn._misc import default_init
 from jax.tree_util import Partial
 from jaxtyping import Array, Bool, Num, PRNGKeyArray
 
-__all__ = ["PartialConv", "PartialConvBlock"]
+__all__ = ["PartialConv", "PartialConvBlock", "PartialConvDWS"]
 
 
 class PartialConv(eqx.nn.Conv):
@@ -62,9 +62,11 @@ class PartialConv(eqx.nn.Conv):
             groups (int, optional): number of input channel groups. Defaults to 1.
             use_bias (bool, optional): whether to add on a bias after the convolution. Defaults to False.
             padding_mode (str, optional): string to specify padding values. See Equinox `nn.Conv` documentation. Defaults to "ZEROS".
-            dtype (_type_, optional): dtype to use for the weight and bias in this layer. Defaults to None, which will use either `jnp.float32` or `jnp.float64` depending on whether JAX is in 64-bit mode.
+            dtype (optional): dtype to use for the weight and bias in this layer. Defaults to None, which will use either `jnp.float32` or `jnp.float64` depending on whether JAX is in 64-bit mode.
             return_mask (bool, optional): return the current mask. Defaults to False.
             fft_conv (bool, optional): use FFT convolution. Defaults to False.
+            weight (Array, optional): the weight
+            fixed (bool, optional): whether the weights are trainable (`fixed=False`) or not. Defaults to False.
         """
         bkey, ckey = jax.random.split(key, 2)
         grouped_in_channels = in_channels // groups
@@ -117,7 +119,7 @@ class PartialConv(eqx.nn.Conv):
             window_strides=self.stride,
             padding=self.padding,
             rhs_dilation=self.dilation,
-            feature_group_count=1,
+            feature_group_count=groups,
         )
         self.window_size = math.prod(self.mask_update_kernel.shape[2:])
         # setup the bias term
@@ -178,13 +180,121 @@ class PartialConv(eqx.nn.Conv):
             return out
 
 
+class PartialConvDWS(eqx.Module):
+    """Depth-wise separable partial convolution."""
+
+    conv_dw: PartialConv
+    conv_pw: PartialConv
+    return_mask: bool = eqx.field(static=True)
+
+    def __init__(
+        self,
+        num_spatial_dims: int,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | Sequence[int],
+        stride: int | Sequence[int] = 1,
+        padding: Union[str, int, Sequence[int], Sequence[Tuple[int, int]]] = 0,
+        dilation: int | Sequence[int] = 1,
+        groups: int = 1,
+        use_bias: bool = False,
+        padding_mode: str = "ZEROS",
+        dtype=None,
+        return_mask: bool = False,
+        fft_conv: bool = False,
+        *,
+        weight_dw: Array | None = None,
+        fixed_dw: bool = False,
+        weight_pw: Array | None = None,
+        fixed_pw: bool = False,
+        key: PRNGKeyArray,
+    ):
+        """Initialize the layer.
+
+        Args:
+            num_spatial_dims (int): number of spatial dimensions
+            in_channels (int): number of input channels
+            out_channels (int): number of output channels
+            kernel_size (int | Sequence[int]): size of the convolution kernel
+            key (PRNGKeyArray): a `jax.random.PRNGKey` used to provide randomness for parameter initialization. (Keyword only argument).
+            stride (int | Sequence[int], optional): stride of the convolution. Defaults to 1.
+            padding (Union[str, int, Sequence[int], Sequence[Tuple[int, int]]], optional): padding of the convolution. Defaults to 0.
+            dilation (int | Sequence[int], optional): dilation of the convolution. Defaults to 1.
+            groups (int, optional): number of input channel groups. Defaults to 1.
+            use_bias (bool, optional): whether to add on a bias after the convolution. Defaults to False.
+            padding_mode (str, optional): string to specify padding values. See Equinox `nn.Conv` documentation. Defaults to "ZEROS".
+            dtype (optional): dtype to use for the weight and bias in this layer. Defaults to None, which will use either `jnp.float32` or `jnp.float64` depending on whether JAX is in 64-bit mode.
+            return_mask (bool, optional): return the current mask. Defaults to False.
+            fft_conv (bool, optional): use FFT convolution. Defaults to False.
+            weight_dw (Array, optional): user-specified weight of the depthwise convolution. Defaults to None.
+            fixed_dw (bool, optional): whether the weights are trainable (`fixed=False`) or not. Defaults to False.
+            weight_pw (Array, optional): user-specified weight of the pointwise convolution. Defaults to None.
+            fixed_pw (bool, optional): whether the weights are trainable (`fixed=False`) or not. Defaults to False.
+        """
+        self.return_mask = return_mask
+        key_dw, key_pw = jax.random.split(key, 2)
+        self.conv_dw = PartialConv(
+            num_spatial_dims,
+            in_channels,
+            in_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            in_channels,
+            use_bias,
+            padding_mode,
+            dtype,
+            True,
+            fft_conv,
+            weight=weight_dw,
+            fixed=fixed_dw,
+            key=key_dw,
+        )
+        self.conv_pw = PartialConv(
+            num_spatial_dims,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            use_bias,
+            padding_mode,
+            dtype,
+            True,
+            fft_conv,
+            weight=weight_pw,
+            fixed=fixed_pw,
+            key=key_pw,
+        )
+
+    def __call__(
+        self, x: Array, mask: Array, epsilon: float = 1e-8
+    ) -> Array | Tuple[Array, Array]:
+        """Forward pass of a partial convolution.
+
+        Args:
+            x (Num[Array]): input array.
+            mask (Bool[Array]): mask array.
+            epsilon (float, optional): small parameter to prevent division by zero. Defaults to 1e-8.
+
+        Returns:
+            Union[Array, Tuple[Array, Array]]: either the post-convolution array, or the post-convolution array and the updated mask, if `return_mask=True` was set during module initialization.
+        """
+        y, mask = self.conv_dw(x, mask, epsilon)
+        z, mask = self.conv_pw(y, mask, epsilon)
+        return z, mask if self.return_mask else z
+
+
 class PartialConvBlock(eqx.Module):
     """A two-layer block of partial convolutions.
     Often used in UNet-style architectures within the encoder.
     """
 
-    conv1: PartialConv
-    conv2: Optional[PartialConv]
+    conv1: PartialConv | PartialConvDWS
+    conv2: Optional[PartialConv | PartialConvDWS]
     dropout: eqx.nn.Dropout
     activation: Callable[[Array], Array]
 
@@ -205,6 +315,7 @@ class PartialConvBlock(eqx.Module):
         fft_conv: bool = False,
         activation: str = "leaky_relu",
         dropout_prob: float = 0.0,
+        depthwise_separable: bool = False,
         *,
         key: PRNGKeyArray,
     ):
@@ -226,12 +337,14 @@ class PartialConvBlock(eqx.Module):
             dtype (_type_, optional): datatype for weights in the layer. Defaults to None.
             fft_conv (bool, optional): whether to use FFT convolutions or not. Defaults to False.
             activation (str, optional): the activation function to use after each convolution. Defaults to "leaky_relu".
+            depthwise_separable (bool, optional): Use depthwise-separable convolutions in the block. Defaults to False.
 
         Raises:
             ValueError: if invalid activation function specified.
         """
         key1, key2 = jax.random.split(key, 2)
-        self.conv1 = PartialConv(
+        conv_fun = PartialConvDWS if depthwise_separable else PartialConv
+        self.conv1 = conv_fun(
             num_spatial_dims,
             in_channels,
             out_channels,
@@ -248,7 +361,7 @@ class PartialConvBlock(eqx.Module):
             key=key1,
         )
         if not single_conv:
-            self.conv2 = PartialConv(
+            self.conv2 = conv_fun(
                 num_spatial_dims,
                 out_channels,
                 out_channels,

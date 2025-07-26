@@ -33,12 +33,10 @@ def test_pconv2d_value1m_bias() -> None:
     m[0, 2, 2] = 0
     clj = PartialConv(2, 1, 1, 3, 1, "same", use_bias=True, key=jr.key(1))
     clt = PartialConv2d(1, 1, 3, 1, padding=1, bias=True)
-    print([clj._bias, clt.bias], flush=True)
     clt.weight = torch.nn.Parameter(torch.tensor(numpy.asarray(clj.weight)))
     clt.bias = torch.nn.Parameter(
         torch.tensor(numpy.asarray(clj._bias))[0, 0, :]
     )
-    print([clj._bias, clt.bias], flush=True)
     out_jax = clj(jnp.asarray(x), jnp.asarray(m))
     out_jax = numpy.asarray(out_jax)
     out_pyt = (
